@@ -1,0 +1,22 @@
+# Dependências
+node_modules/
+
+# Builds
+dist/
+build/
+
+# Downloads (ficheiros baixados)
+backend/downloads/
+
+# Firebase
+.firebase/
+firebase-debug.log
+
+# Ambiente
+.env
+.env.local
+
+# Sistema
+.DS_Store
+Thumbs.db
+*.log
