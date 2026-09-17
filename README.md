@@ -68,6 +68,17 @@ yt-playlist-downloader/
 | GET | `/api/files/download?path=` | Descarrega ficheiro |
 | DELETE | `/api/files?path=` | Apaga ficheiro |
 
+## Deploy online (Render)
+
+O app corre inteiro num único servidor (UI + backend + yt-dlp + ffmpeg) via Docker.
+
+1. Faz push do repositório para o GitHub
+2. No [Render](https://render.com): **New → Web Service → liga o repositório**
+3. O Render deteta o `Dockerfile` automaticamente (ou usa o blueprint `render.yaml`)
+4. Plano grátis é suficiente para começar
+
+> **Nota:** no plano grátis do Render o disco é efémero — os ficheiros baixados são temporários (o utilizador guarda-os no PC pelo browser) e o serviço "adormece" após ~15 min de inatividade.
+
 ## Notas legais
 
 Baixa apenas conteúdo para o qual tens direitos (domínio público, Creative Commons, ou com autorização do autor). Respeita os termos de serviço do YouTube.
