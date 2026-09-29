@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import archiver from 'archiver';
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -8,8 +9,10 @@ import crypto from 'crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOWNLOADS_DIR = path.join(__dirname, 'downloads');
+const COOKIES_FILE = path.join(__dirname, 'cookies.txt');
 const PORT = process.env.PORT || 3001;
 const YTDLP = process.env.YTDLP_PATH || 'yt-dlp';
+const EXTRACTOR_ARGS = process.env.YTDLP_EXTRACTOR_ARGS || 'youtube:player_client=android,web_embedded';
 const MAX_CONCURRENT = 3;
 
 const app = express();
@@ -25,6 +28,21 @@ const downloads = new Map(); // id -> estado do download
 const queue = [];
 let activeCount = 0;
 
+async function hasCookies() {
+  try {
+    await fs.access(COOKIES_FILE);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function baseArgs() {
+  const args = ['--no-warnings', '--extractor-args', EXTRACTOR_ARGS];
+  if (await hasCookies()) args.push('--cookies', COOKIES_FILE);
+  return args;
+}
+
 function sanitize(name) {
   return String(name)
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
@@ -33,8 +51,8 @@ function sanitize(name) {
     .slice(0, 120) || 'download';
 }
 
-function formatArgs(format, url, outputTemplate) {
-  const args = ['--no-playlist', '--newline', '--no-warnings', '-o', outputTemplate];
+async function formatArgs(format, url, outputTemplate) {
+  const args = ['--no-playlist', '--newline', '--windows-filenames', ...(await baseArgs()), '-o', outputTemplate];
   if (format === 'mp3') {
     args.push('-x', '--audio-format', 'mp3', '--audio-quality', '0');
   } else {
@@ -44,6 +62,7 @@ function formatArgs(format, url, outputTemplate) {
       : 'bestvideo*+bestaudio/best';
     args.push('-f', f, '--merge-output-format', 'mp4');
   }
+  args.push('--retries', '3', '--fragment-retries', '3');
   args.push(
     '--progress-template',
     'download:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s',
@@ -69,13 +88,13 @@ async function findOutputFile(outputDir, videoId) {
   return null;
 }
 
-function runDownload(dl) {
+async function runDownload(dl) {
   const { url, format, outputDir } = dl;
-  const outputTemplate = path.join(outputDir, '%(title)s [%(id)s].%(ext)s');
+  const outputTemplate = path.join(outputDir, '%(title).80B [%(id)s].%(ext)s');
   const videoId = extractVideoId(url);
 
   dl.status = 'downloading';
-  const child = spawn(YTDLP, formatArgs(format, url, outputTemplate), { windowsHide: true });
+  const child = spawn(YTDLP, await formatArgs(format, url, outputTemplate), { windowsHide: true });
 
   child.stdout.on('data', (buf) => {
     const text = buf.toString();
@@ -157,11 +176,11 @@ function startDownload({ url, title, format, playlistTitle }) {
 // ---------------------------------------------------------------------------
 
 // Análise de playlist/vídeo (rápida, usa --flat-playlist)
-app.get('/api/info', (req, res) => {
+app.get('/api/info', async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).json({ error: 'URL em falta' });
 
-  const child = spawn(YTDLP, ['--flat-playlist', '--dump-single-json', '--no-warnings', url], {
+  const child = spawn(YTDLP, ['--flat-playlist', '--dump-single-json', ...(await baseArgs()), url], {
     windowsHide: true,
   });
   let stdout = '';
@@ -198,6 +217,69 @@ app.get('/api/info', (req, res) => {
       res.status(500).json({ error: 'Erro ao interpretar a resposta do yt-dlp' });
     }
   });
+});
+
+// Pesquisa de vídeos no YouTube (ytsearch)
+app.get('/api/search', async (req, res) => {
+  const q = req.query.q;
+  if (!q) return res.status(400).json({ error: 'Termo de pesquisa em falta' });
+
+  const child = spawn(YTDLP, ['--dump-single-json', ...(await baseArgs()), `ytsearch20:${q}`], {
+    windowsHide: true,
+  });
+  let stdout = '';
+  let stderr = '';
+
+  child.stdout.on('data', (d) => (stdout += d));
+  child.stderr.on('data', (d) => (stderr += d));
+
+  child.on('close', (code) => {
+    if (code !== 0) {
+      const m = stderr.match(/ERROR:\s*(.+)/);
+      return res.status(500).json({ error: m ? m[1].trim() : 'Falha na pesquisa' });
+    }
+    try {
+      const info = JSON.parse(stdout);
+      const entries = info.entries || [];
+      const items = entries
+        .filter((e) => e && e.id)
+        .map((e) => ({
+          id: e.id,
+          title: e.title || 'Sem título',
+          duration: e.duration || null,
+          thumbnail: `https://i.ytimg.com/vi/${e.id}/hqdefault.jpg`,
+          url: `https://www.youtube.com/watch?v=${e.id}`,
+        }));
+      res.json({
+        isPlaylist: true,
+        title: `Resultados para "${q}"`,
+        channel: 'Pesquisa YouTube',
+        count: items.length,
+        items,
+      });
+    } catch {
+      res.status(500).json({ error: 'Erro ao interpretar a resposta do yt-dlp' });
+    }
+  });
+});
+
+// Cookies do browser (para contornar bloqueio 403 em servidores cloud)
+app.get('/api/cookies', async (req, res) => {
+  res.json({ active: await hasCookies() });
+});
+
+app.post('/api/cookies', express.text({ limit: '2mb' }), async (req, res) => {
+  const content = req.body || '';
+  if (!content.includes('Netscape')) {
+    return res.status(400).json({ error: 'Ficheiro de cookies inválido (formato Netscape)' });
+  }
+  await fs.writeFile(COOKIES_FILE, content, 'utf8');
+  res.json({ ok: true });
+});
+
+app.delete('/api/cookies', async (req, res) => {
+  await fs.unlink(COOKIES_FILE).catch(() => {});
+  res.json({ ok: true });
 });
 
 // Iniciar download de um vídeo
@@ -256,6 +338,26 @@ function resolveSafe(rel) {
   if (!full.startsWith(root)) return null;
   return full;
 }
+
+app.get('/api/files/download-all', async (req, res) => {
+  try {
+    const files = await walk(DOWNLOADS_DIR);
+    if (!files.length) return res.status(404).json({ error: 'Sem ficheiros para guardar' });
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="baido-downloads.zip"');
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.on('error', (err) => {
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+    });
+    archive.pipe(res);
+    for (const f of files) {
+      archive.file(path.join(DOWNLOADS_DIR, f.name), { name: f.name });
+    }
+    await archive.finalize();
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.get('/api/files/download', async (req, res) => {
   const full = resolveSafe(req.query.path || '');

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Youtube, Download, FolderDown, AlertTriangle } from 'lucide-react';
+import { Youtube, Download, FolderDown, AlertTriangle, Cookie } from 'lucide-react';
 import PlaylistForm from './components/PlaylistForm';
 import VideoGrid from './components/VideoGrid';
 import DownloadsPanel from './components/DownloadsPanel';
@@ -7,7 +7,9 @@ import FilesPanel from './components/FilesPanel';
 
 export default function App() {
   const [url, setUrl] = useState('');
+  const [mode, setMode] = useState('link');
   const [format, setFormat] = useState('best');
+  const [hasCookies, setHasCookies] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [info, setInfo] = useState(null);
   const [error, setError] = useState('');
@@ -39,6 +41,10 @@ export default function App() {
 
   useEffect(() => {
     fetchFiles();
+    fetch('/api/cookies')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setHasCookies(d.active))
+      .catch(() => {});
   }, [fetchFiles]);
 
   // Polling de progresso enquanto houver downloads ativos
@@ -67,7 +73,11 @@ export default function App() {
     setInfo(null);
     setSelected(new Set());
     try {
-      const res = await fetch(`/api/info?url=${encodeURIComponent(url.trim())}`);
+      const res = await fetch(
+        mode === 'search'
+          ? `/api/search?q=${encodeURIComponent(url.trim())}`
+          : `/api/info?url=${encodeURIComponent(url.trim())}`
+      );
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Falha ao analisar o link');
       setInfo(data);
@@ -120,6 +130,29 @@ export default function App() {
     }
   };
 
+  const handleCookiesUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const res = await fetch('/api/cookies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: text,
+      });
+      if (res.ok) setHasCookies(true);
+      else setError('Ficheiro de cookies inválido (formato Netscape)');
+    } catch {
+      setError('Erro ao carregar os cookies');
+    }
+    e.target.value = '';
+  };
+
+  const handleCookiesRemove = async () => {
+    await fetch('/api/cookies', { method: 'DELETE' });
+    setHasCookies(false);
+  };
+
   const selectedCount = selected.size;
 
   return (
@@ -145,7 +178,34 @@ export default function App() {
         setFormat={setFormat}
         onAnalyze={handleAnalyze}
         analyzing={analyzing}
+        mode={mode}
+        setMode={setMode}
       />
+
+      {/* Cookies (opcional) */}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-2.5">
+        <div className="flex items-center gap-2 text-xs text-slate-400">
+          <Cookie className="h-4 w-4 shrink-0" />
+          {hasCookies ? (
+            <span className="text-emerald-400">Cookies ativos — o YouTube não bloqueia os downloads</span>
+          ) : (
+            <span>YouTube a bloquear (erro 403)? Carrega os cookies do teu browser (formato Netscape).</span>
+          )}
+        </div>
+        {hasCookies ? (
+          <button
+            onClick={handleCookiesRemove}
+            className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-red-500/50 hover:text-red-300"
+          >
+            Remover cookies
+          </button>
+        ) : (
+          <label className="cursor-pointer rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-slate-700 hover:text-white">
+            Carregar cookies.txt
+            <input type="file" accept=".txt" className="hidden" onChange={handleCookiesUpload} />
+          </label>
+        )}
+      </div>
 
       {error && (
         <div className="mt-4 flex items-center gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
