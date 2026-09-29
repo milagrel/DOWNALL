@@ -79,6 +79,17 @@ O app corre inteiro num único servidor (UI + backend + yt-dlp + ffmpeg) via Doc
 
 > **Nota:** no plano grátis do Render o disco é efémero — os ficheiros baixados são temporários (o utilizador guarda-os no PC pelo browser) e o serviço "adormece" após ~15 min de inatividade.
 
+## Cookies (quando o YouTube/Facebook bloqueia com 403)
+
+Servidores cloud (Render) usam IPs de datacenter que o YouTube e o Facebook bloqueiam. A solução é carregar os cookies do teu browser no app:
+
+1. Instala a extensão **"Get cookies.txt LOCALLY"** no Chrome/Edge/Firefox
+2. Abre o YouTube (ou Facebook) e faz login
+3. Clica na extensão → **Export** → guarda o ficheiro `cookies.txt`
+4. No Baido: **Carregar cookies.txt** (painel por baixo do formulário)
+
+O ficheiro fica guardado no servidor (`backend/cookies.txt`) e é usado em todos os downloads. Podes removê-lo quando quiseres.
+
 ## Notas legais
 
 Baixa apenas conteúdo para o qual tens direitos (domínio público, Creative Commons, ou com autorização do autor). Respeita os termos de serviço do YouTube.
