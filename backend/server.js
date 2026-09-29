@@ -180,43 +180,55 @@ app.get('/api/info', async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).json({ error: 'URL em falta' });
 
-  const child = spawn(YTDLP, ['--flat-playlist', '--dump-single-json', ...(await baseArgs()), url], {
-    windowsHide: true,
-  });
-  let stdout = '';
-  let stderr = '';
-
-  child.stdout.on('data', (d) => (stdout += d));
-  child.stderr.on('data', (d) => (stderr += d));
-
-  child.on('close', (code) => {
-    if (code !== 0) {
-      const m = stderr.match(/ERROR:\s*(.+)/);
-      return res.status(500).json({ error: m ? m[1].trim() : 'Falha ao analisar o link' });
-    }
-    try {
-      const info = JSON.parse(stdout);
-      const entries = info.entries || [info];
-      const items = entries
-        .filter((e) => e && e.id)
-        .map((e) => ({
-          id: e.id,
-          title: e.title || 'Sem título',
-          duration: e.duration || null,
-          thumbnail: `https://i.ytimg.com/vi/${e.id}/hqdefault.jpg`,
-          url: `https://www.youtube.com/watch?v=${e.id}`,
-        }));
-      res.json({
-        isPlaylist: Array.isArray(info.entries),
-        title: info.playlist_title || info.title || 'Playlist',
-        channel: info.channel || info.uploader || '',
-        count: items.length,
-        items,
+  const commonArgs = await baseArgs();
+  const runInfo = (targetUrl) =>
+    new Promise((resolve) => {
+      const child = spawn(YTDLP, ['--flat-playlist', '--dump-single-json', ...commonArgs, targetUrl], {
+        windowsHide: true,
       });
-    } catch {
-      res.status(500).json({ error: 'Erro ao interpretar a resposta do yt-dlp' });
-    }
-  });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => (stdout += d));
+      child.stderr.on('data', (d) => (stderr += d));
+      child.on('close', (code) => resolve({ code, stdout, stderr }));
+    });
+
+  let result = await runInfo(url);
+
+  // Fallback: Mix/radio (list=RD...) falham em IPs de datacenter -> tenta só o vídeo
+  if (result.code !== 0 && /[?&]list=RD/i.test(url)) {
+    const stripped = url
+      .replace(/[?&](list=[^&]*|start_radio=[^&]*)/g, '')
+      .replace(/[?&]$/, '');
+    if (stripped !== url) result = await runInfo(stripped);
+  }
+
+  if (result.code !== 0) {
+    const m = result.stderr.match(/ERROR:\s*(.+)/);
+    return res.status(500).json({ error: m ? m[1].trim() : 'Falha ao analisar o link' });
+  }
+  try {
+    const info = JSON.parse(result.stdout);
+    const entries = info.entries || [info];
+    const items = entries
+      .filter((e) => e && e.id)
+      .map((e) => ({
+        id: e.id,
+        title: e.title || 'Sem título',
+        duration: e.duration || null,
+        thumbnail: `https://i.ytimg.com/vi/${e.id}/hqdefault.jpg`,
+        url: `https://www.youtube.com/watch?v=${e.id}`,
+      }));
+    res.json({
+      isPlaylist: Array.isArray(info.entries),
+      title: info.playlist_title || info.title || 'Playlist',
+      channel: info.channel || info.uploader || '',
+      count: items.length,
+      items,
+    });
+  } catch {
+    res.status(500).json({ error: 'Erro ao interpretar a resposta do yt-dlp' });
+  }
 });
 
 // Pesquisa de vídeos no YouTube (ytsearch)
@@ -273,8 +285,14 @@ app.post('/api/cookies', express.text({ limit: '2mb' }), async (req, res) => {
   if (!content.includes('Netscape')) {
     return res.status(400).json({ error: 'Ficheiro de cookies inválido (formato Netscape)' });
   }
+  const hasYoutube = /\.youtube\.com\s/.test(content) || /youtube\.com\s/.test(content);
   await fs.writeFile(COOKIES_FILE, content, 'utf8');
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    warning: hasYoutube
+      ? null
+      : 'Este ficheiro não tem cookies do YouTube. Abre youtube.com (com login) e exporta novamente.',
+  });
 });
 
 app.delete('/api/cookies', async (req, res) => {

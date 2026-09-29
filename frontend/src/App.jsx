@@ -140,8 +140,13 @@ export default function App() {
         headers: { 'Content-Type': 'text/plain' },
         body: text,
       });
-      if (res.ok) setHasCookies(true);
-      else setError('Ficheiro de cookies inválido (formato Netscape)');
+      if (res.ok) {
+        const data = await res.json();
+        setHasCookies(true);
+        if (data.warning) setError(data.warning);
+      } else {
+        setError('Ficheiro de cookies inválido (formato Netscape)');
+      }
     } catch {
       setError('Erro ao carregar os cookies');
     }
